@@ -477,7 +477,7 @@ thread_func_ret_t render_tile(thread_func_param_t data)
                     break;
             }
             
-            color_t color = get_color(iteration, tile->max_iterations, COLOR_GRAYSCALE);
+            color_t color = get_color(iteration, tile->max_iterations, COLOR_BLUE);
             set_pixel(tile->platform, x, y, color);
         }
     }
