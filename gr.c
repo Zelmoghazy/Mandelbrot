@@ -695,8 +695,8 @@ void draw_filled_polygon(platform_api_t *platform, const int *vx, const int *vy,
 
 void clear_screen(platform_api_t *platform)
 {
-    color_t bg = {98, 114, 164, 255};
-    color_t bg2 = {40, 42, 54, 255};
+    color_t bg = {43, 58, 73, 255};
+    color_t bg2 = {27, 41, 56, 255};
 
     float center_x = platform->screen_width * 0.5f;
     float center_y = platform->screen_height * 0.5f;

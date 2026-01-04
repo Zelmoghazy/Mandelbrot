@@ -66,7 +66,9 @@ typedef struct
 
     int last_mouse_x;
     int last_mouse_y;
-    
+
+    bool use_gpu;
+        
     void *user_data;
 } app_state_t;
 

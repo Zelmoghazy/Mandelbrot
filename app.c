@@ -21,6 +21,10 @@
 #include "util.h"
 #include "util.c"
 
+#ifdef USE_CUDA
+#include "mandelbrot_gpu.h"
+#endif
+
 simple_font_t* simple_font = NULL;
 color_t color_map[512];
 
@@ -95,6 +99,7 @@ color_t get_color(int iterations, int max_iterations, color_palette_t palette)
         }
         case COLOR_BLUE:
         {
+            // Continuous Dwell
             float smooth_iter = (float)iterations - log2f(log2f(sqrtf(iterations * iterations))) + 4.0f;
             float t = smooth_iter / (float)max_iterations;
             
@@ -449,7 +454,6 @@ thread_func_ret_t render_tile(thread_func_param_t data)
     {
         for (u32 x = tile->start_x; x < tile->end_x; ++x) 
         {
-        
             double c_re = SCREEN_TO_COMPLEX(x, tile->center_x, tile->platform->screen_width, tile->scale);
             double c_im = SCREEN_TO_COMPLEX(y, tile->center_y, tile->platform->screen_height, tile->scale);
             
@@ -479,6 +483,13 @@ thread_func_ret_t render_tile(thread_func_param_t data)
             
             color_t color = get_color(iteration, tile->max_iterations, COLOR_BLUE);
             set_pixel(tile->platform, x, y, color);
+
+/*             if(y == tile->start_y ||  y == tile->end_y-1)
+                set_pixel_blend(tile->platform, x, y, (color_t){255,255,255,64});
+
+            if(x == tile->start_x ||  x == tile->end_x-1)
+                set_pixel_blend(tile->platform, x, y, (color_t){255,255,255,64}); */
+
         }
     }
 
@@ -495,6 +506,8 @@ void render_mandelbrot_parallel(platform_api_t *platform, double center_x, doubl
     u32 width   = platform->screen_width;
 
     i32 num_threads = get_core_count();
+
+    // slice the screen up to 64x64 px tiles
     const u32 tile_size = 64;
 
     u32 tiles_x = CEIL_DIV(width, tile_size);
@@ -509,12 +522,12 @@ void render_mandelbrot_parallel(platform_api_t *platform, double center_x, doubl
     for (u32 ty = 0; ty < tiles_y; ty++) 
     {
         u32 start_y = ty * tile_size;
-        u32 end_y = (start_y + tile_size > height) ? height : start_y + tile_size;
+        u32 end_y = MIN(height, start_y + tile_size);
         
         for (u32 tx = 0; tx < tiles_x; tx++) 
         {
             u32 start_x = tx * tile_size;
-            u32 end_x = (start_x + tile_size > width) ? width : start_x + tile_size;
+            u32 end_x = MIN(width, (start_x + tile_size)); 
             
             tiles[tile_idx] = (tile_data_t){
                 .start_x = start_x, .end_x = end_x,
@@ -544,7 +557,8 @@ void render_mandelbrot_parallel(platform_api_t *platform, double center_x, doubl
         }
     }
 
-    int remaining_threads = (total_tiles < num_threads) ? total_tiles : num_threads;
+    // total num of tiles maybe less than number of threads created 
+    int remaining_threads = MIN(total_tiles, num_threads);
 
     PROFILE("Waiting to join")
     {
@@ -555,6 +569,24 @@ void render_mandelbrot_parallel(platform_api_t *platform, double center_x, doubl
 
     free(tiles);
     free(threads);
+}
+
+void render_mandelbrot_gpu(platform_api_t *platform, double center_x, double center_y, 
+                           double scale, int max_iterations) 
+{
+    #ifdef USE_CUDA
+        cuda_render_mandelbrot(
+            platform->pixels,
+            platform->screen_width,
+            platform->screen_height,
+            center_x,
+            center_y,
+            scale,
+            max_iterations
+        );
+    #else
+        render_mandelbrot_parallel(platform, center_x, center_y, scale, max_iterations);
+    #endif
 }
 
 EXPORT void app_init(platform_api_t *platform, app_state_t *state) 
@@ -586,6 +618,25 @@ EXPORT void app_init(platform_api_t *platform, app_state_t *state)
     for (int i = 0; i < 512; ++i){
         color_map[i] = rgb_from_wavelength(380.0 + (i * 400.0 / 512));
     }
+
+    #ifdef USE_CUDA
+        if (cuda_is_available()) 
+        {
+            printf("[GPU] CUDA is available!\n");
+            cuda_print_info();
+            cuda_init(1920,1080);
+            state->use_gpu = true;
+        } 
+        else 
+        {
+            printf("[GPU] CUDA not available, using CPU fallback\n");
+            state->use_gpu = false;
+        }
+    #else
+        state->use_gpu = false;
+        printf("[GPU] Not compiled with CUDA support\n");
+    #endif
+
 
     printf("[APP] Initialized!\n");
 }
@@ -647,6 +698,16 @@ EXPORT void app_update(platform_api_t *platform, app_state_t *state)
         state->target_scale = 0.002;
     }
 
+    if (platform->keys_pressed['G']) 
+    {
+        #ifdef USE_CUDA
+            state->use_gpu = !state->use_gpu;
+            printf("Switched to %s rendering\n", state->use_gpu ? "GPU" : "CPU");
+        #else
+            printf("Not compiled with CUDA support\n");
+        #endif
+    }
+
     state->last_mouse_x = platform->mouse_x;
     state->last_mouse_y = platform->mouse_y;
 }
@@ -654,39 +715,52 @@ EXPORT void app_update(platform_api_t *platform, app_state_t *state)
 EXPORT void app_render(platform_api_t *platform, app_state_t *state) 
 {
     float t = state->animation_time;
-    
+
     double current_scale = state->view_scale;           
     double current_center_x = state->view_center_x;
     double current_center_y = state->view_center_y;
-    int max_iterations = 64;
+    int max_iterations = 1024;
     
-    // clear_screen(platform);
+    clear_screen(platform);
 
-    PROFILE("mandelbrot") 
-    {
-        // render_mandelbrot_simple(platform, current_center_x, current_center_y, current_scale, max_iterations);
-        render_mandelbrot_parallel(platform,current_center_x, current_center_y, current_scale, max_iterations);
-    }
+    #ifdef USE_CUDA
+        if (state->use_gpu) 
+        {
+            PROFILE("mandelbrot_gpu") 
+            {
+                render_mandelbrot_gpu(platform, current_center_x, current_center_y, 
+                                    current_scale, max_iterations);
+            }
+        } 
+        else
+    #endif
+        {
+            PROFILE("mandelbrot_cpu") 
+            {
+                render_mandelbrot_parallel(platform, current_center_x, current_center_y, 
+                                        current_scale, max_iterations);
+            }
+        }
 
     double mouse_cx = SCREEN_TO_COMPLEX(platform->mouse_x, current_center_x, platform->screen_width, current_scale);
     double mouse_cy = SCREEN_TO_COMPLEX(platform->mouse_y, current_center_y, platform->screen_height, current_scale);
 
     if(current_scale > 0.0001 && current_scale < 0.003)
     {
-        render_complex_plane(platform, current_center_x, current_center_y, current_scale);
+        // render_complex_plane(platform, current_center_x, current_center_y, current_scale);
         // visualize_mandelbrot_iterations(platform, mouse_cx, mouse_cy, current_center_x, current_center_y, current_scale);
 
-        static char coord_text[64];
-        snprintf(coord_text, sizeof(coord_text), "(%.2f %+.2fi)", mouse_cx, mouse_cy);
-        rendered_text_t text = {
-            .font = simple_font,  
-            .string = coord_text,
-            .size = strlen(coord_text),
-            .pos = { platform->mouse_x + 15, platform->mouse_y - 15 }, 
-            .color = { 255, 255, 255, 255 }, 
-            .scale = 2
-        };
-        render_text(platform, &text);
+        // static char coord_text[64];
+        // snprintf(coord_text, sizeof(coord_text), "(%.2f %+.2fi)", mouse_cx, mouse_cy);
+        // rendered_text_t text = {
+        //     .font = simple_font,  
+        //     .string = coord_text,
+        //     .size = strlen(coord_text),
+        //     .pos = { platform->mouse_x + 15, platform->mouse_y - 15 }, 
+        //     .color = { 255, 255, 255, 255 }, 
+        //     .scale = 2
+        // };
+        // render_text(platform, &text);
     }
     
     int julia_width = platform->screen_width / 4;
@@ -695,7 +769,7 @@ EXPORT void app_render(platform_api_t *platform, app_state_t *state)
     int julia_y = 10;  
     
     PROFILE("julia_set") {
-        render_julia_set(platform, mouse_cx, mouse_cy, julia_x, julia_y, julia_width, julia_height, 64);
+        // render_julia_set(platform, mouse_cx, mouse_cy, julia_x, julia_y, julia_width, julia_height, 64);
     }
 
     static char time_text[64];
@@ -711,18 +785,33 @@ EXPORT void app_render(platform_api_t *platform, app_state_t *state)
     
     render_text(platform, &delta_time_text);
     
-    static char info[128];
-    snprintf(info, sizeof(info), "c_x: %.2f\nc_y: %.2f\nc_s: %.4f\nc_iter: %d\n", current_center_x, current_center_y,current_scale, max_iterations);
-    rendered_text_t info_text = {
-        .font = simple_font,  
-        .string = info,
-        .size = strlen(info),
-        .pos = {15 , platform->screen_height*0.85}, 
-        .color = { 255, 255, 255, 255 }, 
-        .scale = 1
-    };    
-    render_text(platform, &info_text);
+    // static char info[128];
+    // snprintf(info, sizeof(info), "c_x: %.2f\nc_y: %.2f\nc_s: %.4f\nc_iter: %d\n", current_center_x, current_center_y,current_scale, max_iterations);
+    // rendered_text_t info_text = {
+    //     .font = simple_font,  
+    //     .string = info,
+    //     .size = strlen(info),
+    //     .pos = {15 , platform->screen_height*0.85}, 
+    //     .color = { 255, 255, 255, 255 }, 
+    //     .scale = 1
+    // };    
+    // render_text(platform, &info_text);
 
+    static char backend_text[32];
+    #ifdef USE_CUDA
+        snprintf(backend_text, sizeof(backend_text), "%s", state->use_gpu ? "GPU" : "CPU");
+    #else
+        snprintf(backend_text, sizeof(backend_text), "CPU");
+    #endif
+    rendered_text_t backend = {
+        .font = simple_font,  
+        .string = backend_text,
+        .size = strlen(backend_text),
+        .pos = { platform->screen_width - 180, 45 },
+        .color = { 255, 255, 0, 255 },
+        .scale = 2
+    };
+    render_text(platform, &backend);
 
     prof_sort_results();
     // prof_print_results();
@@ -733,16 +822,17 @@ EXPORT void app_cleanup(platform_api_t *platform, app_state_t *state)
 {
     (void) platform;
     (void) state;
+
+    #ifdef USE_CUDA
+        cuda_cleanup(); 
+    #endif
+
     printf("Cleanup called (before reload/exit)\n");
 }
 
 EXPORT void app_on_reload(platform_api_t *platform, app_state_t *state) 
 {
     (void) platform;
-    // state->view_center_x = -0.637011;
-    // state->view_center_y = -0.0395159;
-    // state->view_scale = 0.002;
-    // state->target_scale = 0.002;
     
     if(simple_font){
         free(simple_font);
@@ -751,5 +841,9 @@ EXPORT void app_on_reload(platform_api_t *platform, app_state_t *state)
     for (int i = 0; i < 512; ++i){
         color_map[i] = rgb_from_wavelength(380.0 + (i * 400.0 / 512));
     }
+    #ifdef USE_CUDA
+        cuda_init(1920,1080); 
+    #endif
+
     printf("Reloaded! State preserved: frame=%d, time=%.2f\n", state->frame_count, state->animation_time);
 }

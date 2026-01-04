@@ -190,7 +190,7 @@ void render_text(platform_api_t const *color_buf, rendered_text_t *text)
         if(x > color_buf->screen_width) 
         {
             y += scaled_height;
-            x=0;
+            x = (u32)text->pos.x;
         }
         string++;
     }

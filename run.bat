@@ -25,7 +25,7 @@ goto unknown_cmd
     echo ========================================
     echo Building app DLL...
     echo ========================================
-    call build_app.bat rel
+    call build_cuda.bat rel yes
     if errorlevel 1 exit /b 1
     
     echo.

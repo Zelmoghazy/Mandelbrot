@@ -125,7 +125,7 @@ int compile_app_dll(void)
         si.wShowWindow = SW_HIDE; // If dwFlags specifies STARTF_USESHOWWINDOW, Hides the window
         
         char cmd[512];
-        snprintf(cmd, sizeof(cmd), "cmd.exe /c cd .. && build_app.bat rel");
+        snprintf(cmd, sizeof(cmd), "cmd.exe /c cd .. && build_cuda.bat rel yes");
         
         /* Creates a new process and its primary thread. */
         if (CreateProcessA(NULL,    // name of the module to be executed (null means use cmd line)

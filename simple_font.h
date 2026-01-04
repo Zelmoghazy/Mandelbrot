@@ -1,8 +1,6 @@
 #ifndef BASE_S_FONT
 #define BASE_S_FONT
 
-
-
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>

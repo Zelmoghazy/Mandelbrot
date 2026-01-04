@@ -4,7 +4,7 @@ if not exist build mkdir build
 copy ".\external\lib\*.dll" ".\build\" >nul 2>&1
 
 :: Set environment vars for MSVC compiler
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+call "D:\Programming\Software\msvc\setup_x64.bat" x64
 
 set CFLAGS=/Zi /EHsc /D_AMD64_ /fp:fast /W4 /MD /nologo /utf-8 /std:clatest /arch:AVX
 set L_FLAGS=/SUBSYSTEM:CONSOLE
